@@ -8,6 +8,17 @@ def _get_user_agent(settings: Optional[Settings] = None) -> str:
         return settings.get_user_agent()
     return get_settings().get_user_agent()
 
+def _get_mounts(http2: bool = True) -> dict[str, httpx.AsyncHTTPTransport | None]:
+    return {
+        key: None
+        if proxy is None 
+        else httpx.AsyncHTTPTransport(
+            proxy=proxy,
+            http2=http2, 
+            retries=0,
+        )
+        for key, proxy in httpx.AsyncClient._get_proxy_map(None, None, True).items()
+    }
 
 class HttpClientFactory:
     _clients: dict[str, httpx.AsyncClient] = {}
@@ -36,6 +47,7 @@ class HttpClientFactory:
                 follow_redirects=True,
                 transport=httpx.AsyncHTTPTransport(http2=http2, retries=0),
                 headers={"User-Agent": _get_user_agent(settings)},
+                mounts=_get_mounts(http2),
                 **kwargs
             )
         return cls._clients[name]
