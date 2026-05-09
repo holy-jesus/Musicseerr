@@ -35,6 +35,10 @@ def is_ipv6_hostname(hostname: str) -> bool:
 
 def _get_proxy_map():
     proxy_info = getproxies()
+
+    if not proxy_info:
+        return {}
+
     mounts: dict[str, str | None] = {}
 
     socksio_installed = True
