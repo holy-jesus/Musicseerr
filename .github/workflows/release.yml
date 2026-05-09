@@ -107,7 +107,7 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE }}:${{ steps.version.outputs.tag }}
-            habirabbu/musicseerr:${{ steps.version.outputs.tag }}
+            ${{ env.GITHUB_REPOSITORY }}:${{ steps.version.outputs.tag }}
           build-args: |
             COMMIT_TAG=${{ steps.version.outputs.tag }}
             BUILD_DATE=${{ steps.date.outputs.timestamp }}
@@ -123,5 +123,5 @@ jobs:
         run: |
           docker buildx imagetools create \
             -t "${IMAGE}:latest" \
-            -t "habirabbu/musicseerr:latest" \
+            -t "${{ env.GITHUB_REPOSITORY }}:latest" \
             "${IMAGE}:${TAG}"

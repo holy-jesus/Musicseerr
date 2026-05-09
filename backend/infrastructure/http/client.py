@@ -1,6 +1,13 @@
+import os
 import httpx
+import logging
 from typing import Optional
+from urllib.request import getproxies
+from contextlib import contextmanager
+import ipaddress
 from core.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def _get_user_agent(settings: Optional[Settings] = None) -> str:
@@ -8,21 +15,92 @@ def _get_user_agent(settings: Optional[Settings] = None) -> str:
         return settings.get_user_agent()
     return get_settings().get_user_agent()
 
+
+# Taken from httpx: https://github.com/encode/httpx/blob/master/httpx/_utils.py
+def is_ipv4_hostname(hostname: str) -> bool:
+    try:
+        ipaddress.IPv4Address(hostname.split("/")[0])
+    except Exception:
+        return False
+    return True
+
+
+def is_ipv6_hostname(hostname: str) -> bool:
+    try:
+        ipaddress.IPv6Address(hostname.split("/")[0])
+    except Exception:
+        return False
+    return True
+
+
+def _get_proxy_map():
+    proxy_info = getproxies()
+    mounts: dict[str, str | None] = {}
+
+    socksio_installed = True
+    try:
+        import socksio
+    except ImportError:
+        socksio_installed = False
+
+    for scheme in ("http", "https", "all"):
+        hostname = proxy_info.get(scheme)
+
+        if not hostname:
+            continue
+
+        if hostname.startswith("socks://"):
+            if not socksio_installed:
+                logger.warning("socksio not installed, `socks://` proxy not supported")
+                continue
+
+            logger.warning("httpx doesn't support `socks://`, replacing with `socks5://`.")
+            hostname = hostname.replace("socks://", "socks5://")
+        mounts[f"{scheme}://"] = hostname if "://" in hostname else f"http://{hostname}"
+
+    if not mounts:
+        logger.warning("No suitable proxy protocols found.")
+
+    no_proxy_hosts = [host.strip() for host in proxy_info.get("no", "").split(",")]
+    for hostname in no_proxy_hosts:
+        if hostname == "*":
+            return {}
+        elif hostname:
+            if "://" in hostname:
+                mounts[hostname] = None
+            elif is_ipv4_hostname(hostname):
+                mounts[f"all://{hostname}"] = None
+            elif is_ipv6_hostname(hostname):
+                mounts[f"all://[{hostname}]"] = None
+            elif hostname.lower() == "localhost":
+                mounts[f"all://{hostname}"] = None
+            else:
+                mounts[f"all://*{hostname}"] = None
+
+    return mounts
+
+
+# ====
+
+
 def _get_mounts(http2: bool = True) -> dict[str, httpx.AsyncHTTPTransport | None]:
-    return {
-        key: None
-        if proxy is None 
-        else httpx.AsyncHTTPTransport(
-            proxy=proxy,
-            http2=http2, 
-            retries=0,
+    mounts = {}
+    for key, proxy in _get_proxy_map().items():
+        mounts[key] = (
+            httpx.AsyncHTTPTransport(
+                proxy=proxy,
+                http2=http2,
+                retries=0,
+            )
+            if proxy
+            else None
         )
-        for key, proxy in httpx.AsyncClient._get_proxy_map(None, None, True).items()
-    }
+    return mounts
+
 
 class HttpClientFactory:
     _clients: dict[str, httpx.AsyncClient] = {}
-    
+
     @classmethod
     def get_client(
         cls,
@@ -33,7 +111,7 @@ class HttpClientFactory:
         max_keepalive: int = 200,
         settings: Optional[Settings] = None,
         http2: bool = True,
-        **kwargs
+        **kwargs,
     ) -> httpx.AsyncClient:
         if name not in cls._clients:
             cls._clients[name] = httpx.AsyncClient(
@@ -48,10 +126,10 @@ class HttpClientFactory:
                 transport=httpx.AsyncHTTPTransport(http2=http2, retries=0),
                 headers={"User-Agent": _get_user_agent(settings)},
                 mounts=_get_mounts(http2),
-                **kwargs
+                **kwargs,
             )
         return cls._clients[name]
-    
+
     @classmethod
     async def close_all(cls) -> None:
         for client in cls._clients.values():
